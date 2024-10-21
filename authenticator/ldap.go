@@ -206,6 +206,34 @@ func (a *LDAPAuthenticator) CheckUserAndPass(username, password, _, _ string, us
 	if err != nil {
 		return nil, err
 	}
+
+    // if user does not exist, try matching password hash from data provider
+
+    if entry == nil {
+        logger.AppLogger.Debug("user not found in ldap, try matching password hash from data provider", "username", username)
+
+        var user sdk.User
+        if err := json.Unmarshal(userAsJSON, &user); err != nil {
+            return nil, err
+        }
+        if user.ID == 0 {
+            return nil, errors.New("user not found in data provider")
+        }
+        if user.Password == "" {
+            return nil, errors.New("no password hash from data provider")
+        }
+
+		var match bool
+        if match, err = verifyPassword(password, user.Password); !match {
+            logger.AppLogger.Debug("password does not match password hash from data provider", "err", err)
+            return nil, err
+        }
+        logger.AppLogger.Debug("pasword macthes password hash from data provider")
+        return userAsJSON, nil
+    }
+
+    // try password auth from ldap
+
 	if err := l.Bind(entry.DN, password); err != nil {
 		return nil, err
 	}
@@ -316,10 +344,15 @@ func (a *LDAPAuthenticator) searchUser(l *ldap.Conn, username string) (*ldap.Ent
 		logger.AppLogger.Debug("search error", "user", username, "err", err)
 		return nil, err
 	}
+    /*
 	if len(sr.Entries) != 1 {
 		logger.AppLogger.Debug("unexpected search result", "user", username, "entries", len(sr.Entries))
 		return nil, fmt.Errorf("user %q does not exist", username)
 	}
+    */
+	if len(sr.Entries) != 1 {
+		return nil, nil
+    }
 	if sr.Entries[0].DN == "" {
 		logger.AppLogger.Debug("unable to find dn", "user", username)
 		return nil, errors.New("unable to find dn")
@@ -333,7 +366,7 @@ func (a *LDAPAuthenticator) getUser(userAsJSON []byte, attributes []*ldap.EntryA
 		return nil, err
 	}
 	if user.ID == 0 && a.isSFTPGoUserRequired() {
-		err := errors.New("LDAP users not defined in SFTPGo are not allowed")
+		err := errors.New("ldap users not defined in SFTPGo are not allowed")
 		logger.AppLogger.Debug("no SFTPGo user defined", "username", user.Username, "err", err)
 		return nil, err
 	}
